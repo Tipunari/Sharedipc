@@ -1,0 +1,73 @@
+#include <stdio.h>
+#include <unistd.h>
+#include <string.h>
+#include <sys/ipc.h>
+#include <sys/shm.h>
+#include <stdlib.h>
+#include <sys/wait.h>
+
+#define SHM_KEY 1234
+
+int main() {
+    int pipefds[2];
+    pid_t pid;
+    char pipe_msg[] = "Message via Pipe!";
+    char pipe_read_msg[100];
+    
+    // Create a pipe
+    if (pipe(pipefds) == -1) {
+        perror("Pipe creation failed");
+        return 1;
+    }
+
+    // Create shared memory
+    int shmid = shmget(SHM_KEY, 1024, 0666 | IPC_CREAT);
+    if (shmid == -1) {
+        perror("Shared memory creation failed");
+        return 1;
+    }
+
+    char *shared_memory = (char *)shmat(shmid, NULL, 0);
+    if (shared_memory == (char *)-1) {
+        perror("Shared memory attach failed");
+        return 1;
+    }
+
+    pid = fork();
+
+    if (pid < 0) {
+        perror("Fork failed");
+        return 1;
+    }
+
+    if (pid == 0) { // Child process
+        // Pipe IPC
+        close(pipefds[1]); // Close write end of the pipe
+        read(pipefds[0], pipe_read_msg, sizeof(pipe_read_msg));
+        printf("Child read from pipe: %s\n", pipe_read_msg);
+        close(pipefds[0]);
+
+        // Shared Memory IPC
+        printf("Child reads from shared memory: %s\n", shared_memory);
+
+        // Detach shared memory in child
+        shmdt(shared_memory);
+    } else { // Parent process
+        // Pipe IPC
+        close(pipefds[0]); // Close read end of the pipe
+        write(pipefds[1], pipe_msg, strlen(pipe_msg) + 1);
+        close(pipefds[1]);
+
+        // Shared Memory IPC
+        strcpy(shared_memory, "Message via Shared Memory!");
+        
+        // Wait for child to finish
+        wait(NULL);
+
+        // Detach and destroy shared memory in parent
+        shmdt(shared_memory);
+        shmctl(shmid, IPC_RMID, NULL);
+    }
+
+    return 0;
+}
